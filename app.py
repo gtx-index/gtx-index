@@ -44,18 +44,34 @@ logging.basicConfig(level=logging.INFO)
 score_history = deque(maxlen=7)
 
 # ---------- HELPERS ----------
-def fetch_soup(url, timeout=10):
-    r = requests.get(url, timeout=timeout)
+def fetch_soup(url, timeout=15):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    r = requests.get(url, timeout=timeout, headers=headers)
     return BeautifulSoup(r.text, 'html.parser')
 
 def extract_text(soup, max_chars=4000):
-    for selector in ['article', 'div#content', 'body']:
-        if selector == 'div#content':
-            tag = soup.find('div', id='content')
-        else:
-            tag = soup.select_one(selector)
+    # Try common content containers
+    for selector in ['article', 'div#content', 'div.content', 'main', 'div.article-body', 'div.story-body']:
+        tag = soup.select_one(selector)
         if tag:
-            return tag.get_text()[:max_chars]
+            text = tag.get_text(separator=' ', strip=True)
+            if len(text) > 100:  # Only return if it has substantial text
+                return text[:max_chars]
+    
+    # Fallback: get all paragraph text
+    paragraphs = soup.find_all('p')
+    if paragraphs:
+        text = ' '.join([p.get_text(strip=True) for p in paragraphs])
+        if len(text) > 100:
+            return text[:max_chars]
+    
+    # Ultimate fallback: just get the body text
+    body = soup.find('body')
+    if body:
+        return body.get_text(separator=' ', strip=True)[:max_chars]
+    
     return ""
 
 def looks_like_individual_doc(url):

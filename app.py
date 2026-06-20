@@ -9,6 +9,8 @@ import re
 import logging
 import tweepy
 import resend
+import openai
+from datetime import datetime as dt
 
 # ---------- AI PROVIDERS ----------
 from groq import Groq
@@ -37,6 +39,11 @@ GEMINI_KEY_1 = os.environ.get("GEMINI_API_KEY_1")
 GEMINI_KEY_2 = os.environ.get("GEMINI_API_KEY_2")
 GEMINI_KEY_3 = os.environ.get("GEMINI_API_KEY_3")
 
+# ---------- ADDITIONAL AI PROVIDERS ----------
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +51,7 @@ logging.basicConfig(level=logging.INFO)
 score_history = deque(maxlen=7)
 
 # ---------- HELPERS ----------
-def fetch_soup(url, timeout=15):
+def fetch_soup(url, timeout=10):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -52,26 +59,20 @@ def fetch_soup(url, timeout=15):
     return BeautifulSoup(r.text, 'html.parser')
 
 def extract_text(soup, max_chars=4000):
-    # Try common content containers
     for selector in ['article', 'div#content', 'div.content', 'main', 'div.article-body', 'div.story-body']:
         tag = soup.select_one(selector)
         if tag:
             text = tag.get_text(separator=' ', strip=True)
-            if len(text) > 100:  # Only return if it has substantial text
+            if len(text) > 100:
                 return text[:max_chars]
-    
-    # Fallback: get all paragraph text
     paragraphs = soup.find_all('p')
     if paragraphs:
         text = ' '.join([p.get_text(strip=True) for p in paragraphs])
         if len(text) > 100:
             return text[:max_chars]
-    
-    # Ultimate fallback: just get the body text
     body = soup.find('body')
     if body:
         return body.get_text(separator=' ', strip=True)[:max_chars]
-    
     return ""
 
 def looks_like_individual_doc(url):
@@ -81,7 +82,6 @@ def looks_like_individual_doc(url):
 
 # ---------- SOURCE SCRAPERS (GEOPOLITICAL) ----------
 def scrape_state_dept():
-    """Scrape US State Department press briefings."""
     sources = []
     try:
         soup = fetch_soup("https://www.state.gov/briefings/")
@@ -99,7 +99,6 @@ def scrape_state_dept():
     return sources
 
 def scrape_china_mfa():
-    """Scrape Chinese Ministry of Foreign Affairs statements."""
     sources = []
     try:
         soup = fetch_soup("https://www.fmprc.gov.cn/eng/xw/")
@@ -117,7 +116,6 @@ def scrape_china_mfa():
     return sources
 
 def scrape_rus_mid():
-    """Scrape Russian Ministry of Foreign Affairs statements (English)."""
     sources = []
     try:
         soup = fetch_soup("https://mid.ru/en/press_service/spokesman/")
@@ -135,7 +133,6 @@ def scrape_rus_mid():
     return sources
 
 def scrape_eu_eeas():
-    """Scrape EU External Action Service statements."""
     sources = []
     try:
         soup = fetch_soup("https://www.eeas.europa.eu/eeas/statements_en")
@@ -153,7 +150,6 @@ def scrape_eu_eeas():
     return sources
 
 def scrape_military_briefings():
-    """Scrape Pentagon / military briefings."""
     sources = []
     try:
         soup = fetch_soup("https://www.defense.gov/News/Releases/")
@@ -171,7 +167,6 @@ def scrape_military_briefings():
     return sources
 
 def scrape_state_media():
-    """Scrape Xinhua (China) and TASS (Russia) headline statements."""
     sources = []
     try:
         soup = fetch_soup("http://www.xinhuanet.com/english/")
@@ -275,19 +270,63 @@ Text:
                 logging.info(f"AI score (Gemini-3): {score}")
                 return max(0, min(100, score))
         except Exception as e:
-            logging.error(f"All AI providers failed: {e}")
+            logging.warning(f"Gemini-3 failed ({e}), falling back to DeepSeek...")
+    
+    # Tier 5: DeepSeek
+    if DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.strip():
+        try:
+            deepseek_client = openai.OpenAI(
+                api_key=DEEPSEEK_API_KEY,
+                base_url="https://api.deepseek.com/v1"
+            )
+            response = deepseek_client.chat.completions.create(
+                model="deepseek-v4-flash",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=5
+            )
+            score_str = response.choices[0].message.content.strip()
+            digits = re.findall(r'\d+', score_str)
+            if digits:
+                score = int(digits[0])
+                logging.info(f"AI score (DeepSeek): {score}")
+                return max(0, min(100, score))
+        except Exception as e:
+            logging.warning(f"DeepSeek failed ({e}), falling back to OpenRouter...")
+    
+    # Tier 6: OpenRouter
+    if OPENROUTER_API_KEY and OPENROUTER_API_KEY.strip():
+        try:
+            openrouter_client = openai.OpenAI(
+                api_key=OPENROUTER_API_KEY,
+                base_url=OPENROUTER_BASE_URL
+            )
+            response = openrouter_client.chat.completions.create(
+                model="openai/gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=5
+            )
+            score_str = response.choices[0].message.content.strip()
+            digits = re.findall(r'\d+', score_str)
+            if digits:
+                score = int(digits[0])
+                logging.info(f"AI score (OpenRouter): {score}")
+                return max(0, min(100, score))
+        except Exception as e:
+            logging.error(f"OpenRouter failed ({e})")
             return None
-    logging.error("No Gemini API keys configured")
+
+    # If we've made it here, all AI providers have failed
+    logging.error("All AI providers failed (Groq, Gemini 1-3, DeepSeek, OpenRouter)")
     return None
 
 # ---------- MARKET EXPECTATION (VIX + GOLD + DEFENCE ETF) ----------
 def compute_market_gtx():
-    """Return a 0–100 score derived from VIX, gold price, and defence ETF flows."""
     vix_change = 0
     gold_change = 0
     defence_change = 0
 
-    # 1. VIX change (volatility proxy)
     try:
         vix_url = "https://query1.finance.yahoo.com/v8/finance/chart/^VIX?interval=1d&range=1d"
         resp = requests.get(vix_url, timeout=15)
@@ -302,7 +341,6 @@ def compute_market_gtx():
     except Exception as e:
         logging.warning(f"VIX error: {e}")
 
-    # 2. Gold change (safe‑haven proxy)
     try:
         gold_url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d"
         resp = requests.get(gold_url, timeout=15)
@@ -317,7 +355,6 @@ def compute_market_gtx():
     except Exception as e:
         logging.warning(f"Gold error: {e}")
 
-    # 3. Defence ETF (ITA) change – proxy for geopolitical risk pricing
     try:
         ita_url = "https://query1.finance.yahoo.com/v8/finance/chart/ITA?interval=1d&range=1d"
         resp = requests.get(ita_url, timeout=15)
@@ -332,7 +369,6 @@ def compute_market_gtx():
     except Exception as e:
         logging.warning(f"Defence ETF error: {e}")
 
-    # Map to 0–100 scores
     vix_score = min(100, max(0, 50 + vix_change * 50))
     gold_score = min(100, max(0, 50 + gold_change * 100))
     defence_score = min(100, max(0, 50 + defence_change * 100))
@@ -462,7 +498,6 @@ def market_gtx():
 def home():
     return "G-Tension (GTX) Geopolitical Temperature Index is live. Use /api/gtx_latest"
 
-# ---------- X AUTO‑POST ENDPOINT ----------
 @app.route('/post_tweet')
 def auto_post():
     try:

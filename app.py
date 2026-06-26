@@ -1,3 +1,4 @@
+import logging
 import requests
 from bs4 import BeautifulSoup
 import os
@@ -542,37 +543,48 @@ def auto_post():
 
 @app.route('/api/gtx_drivers')
 def gtx_drivers():
-    """Return the key risk indicators: VIX, Gold, Defence ETF."""
     import requests
+    import logging
+    import json
     
     drivers = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    # VIX
+    # 1. VIX
     try:
         resp = requests.get(
             "https://query1.finance.yahoo.com/v8/finance/chart/^VIX?interval=1d&range=1d",
-            timeout=10
+            timeout=10,
+            headers=headers
         )
+        logging.info(f"VIX status: {resp.status_code}")
         if resp.status_code == 200:
-            data = resp.json().get("chart", {}).get("result", [])
-            if data:
-                meta = data[0].get("meta", {})
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if result:
+                meta = result[0].get("meta", {})
                 drivers['vix'] = meta.get("regularMarketPrice", "N/A")
             else:
                 drivers['vix'] = "N/A"
+        else:
+            drivers['vix'] = "N/A"
     except Exception as e:
+        logging.error(f"VIX error: {e}")
         drivers['vix'] = "N/A"
     
-    # Gold price change
+    # 2. Gold price change
     try:
         resp = requests.get(
             "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d",
-            timeout=10
+            timeout=10,
+            headers=headers
         )
+        logging.info(f"Gold status: {resp.status_code}")
         if resp.status_code == 200:
-            data = resp.json().get("chart", {}).get("result", [])
-            if data:
-                meta = data[0].get("meta", {})
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if result:
+                meta = result[0].get("meta", {})
                 prev = meta.get("previousClose")
                 curr = meta.get("regularMarketPrice")
                 if prev and curr:
@@ -581,19 +593,25 @@ def gtx_drivers():
                     drivers['gold_change'] = "N/A"
             else:
                 drivers['gold_change'] = "N/A"
+        else:
+            drivers['gold_change'] = "N/A"
     except Exception as e:
+        logging.error(f"Gold error: {e}")
         drivers['gold_change'] = "N/A"
     
-    # Defence ETF (ITA) change
+    # 3. Defence ETF (ITA) change
     try:
         resp = requests.get(
             "https://query1.finance.yahoo.com/v8/finance/chart/ITA?interval=1d&range=1d",
-            timeout=10
+            timeout=10,
+            headers=headers
         )
+        logging.info(f"ITA status: {resp.status_code}")
         if resp.status_code == 200:
-            data = resp.json().get("chart", {}).get("result", [])
-            if data:
-                meta = data[0].get("meta", {})
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if result:
+                meta = result[0].get("meta", {})
                 prev = meta.get("previousClose")
                 curr = meta.get("regularMarketPrice")
                 if prev and curr:
@@ -602,8 +620,20 @@ def gtx_drivers():
                     drivers['ita_change'] = "N/A"
             else:
                 drivers['ita_change'] = "N/A"
+        else:
+            drivers['ita_change'] = "N/A"
     except Exception as e:
+        logging.error(f"ITA error: {e}")
         drivers['ita_change'] = "N/A"
+    
+    # If all drivers failed, return fallback values
+    if not drivers or all(v == "N/A" for v in drivers.values()):
+        logging.warning("All GTX drivers failed – returning fallback values")
+        return jsonify({
+            "vix": 15.0,
+            "gold_change": 0.0,
+            "ita_change": 0.0
+        })
     
     return jsonify(drivers)
 

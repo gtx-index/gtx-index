@@ -540,5 +540,72 @@ def auto_post():
         logging.error(f"Auto‑post failed: {e}")
         return jsonify({"status": f"Error posting tweet: {e}"})
 
+@app.route('/api/gtx_drivers')
+def gtx_drivers():
+    """Return the key risk indicators: VIX, Gold, Defence ETF."""
+    import requests
+    
+    drivers = {}
+    
+    # VIX
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/^VIX?interval=1d&range=1d",
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("chart", {}).get("result", [])
+            if data:
+                meta = data[0].get("meta", {})
+                drivers['vix'] = meta.get("regularMarketPrice", "N/A")
+            else:
+                drivers['vix'] = "N/A"
+    except Exception as e:
+        drivers['vix'] = "N/A"
+    
+    # Gold price change
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d",
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("chart", {}).get("result", [])
+            if data:
+                meta = data[0].get("meta", {})
+                prev = meta.get("previousClose")
+                curr = meta.get("regularMarketPrice")
+                if prev and curr:
+                    drivers['gold_change'] = round(((curr / prev) - 1) * 100, 2)
+                else:
+                    drivers['gold_change'] = "N/A"
+            else:
+                drivers['gold_change'] = "N/A"
+    except Exception as e:
+        drivers['gold_change'] = "N/A"
+    
+    # Defence ETF (ITA) change
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/ITA?interval=1d&range=1d",
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("chart", {}).get("result", [])
+            if data:
+                meta = data[0].get("meta", {})
+                prev = meta.get("previousClose")
+                curr = meta.get("regularMarketPrice")
+                if prev and curr:
+                    drivers['ita_change'] = round(((curr / prev) - 1) * 100, 2)
+                else:
+                    drivers['ita_change'] = "N/A"
+            else:
+                drivers['ita_change'] = "N/A"
+    except Exception as e:
+        drivers['ita_change'] = "N/A"
+    
+    return jsonify(drivers)
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
